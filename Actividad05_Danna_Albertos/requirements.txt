@@ -1,0 +1,6 @@
+fastapi
+uvicorn
+strawberry-graphql[fastapi]
+sqlalchemy
+bcrypt
+python-jose[cryptography]
