@@ -63,7 +63,7 @@ def seed_roles_y_permisos():
     try:
         if db.query(models.Role).count() == 0:
             for code, name, desc in ROLES_INICIALES:
-                db.add(models.Role(code=code, name=name, description=dec))
+                db.add(models.Role(code=code, name=name, description=desc))
         if db.query(models.Permission).count()== 0:
             for code, name, desc in PERMISOS_INICIALES:
                 db.add(models.Permission(code=code, name=name, description=desc))
