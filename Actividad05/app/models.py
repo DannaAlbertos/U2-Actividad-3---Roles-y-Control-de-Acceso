@@ -128,3 +128,21 @@ class Transaction(Base):
     account = relationship("Account", back_populates="transactions")
     concept = relationship("Concept")
     captured_by_user = relationship("User", back_populates="transactions")
+
+# Implementación de roles
+
+class Role(Base):
+    __tablename__="roles"
+    id = Column(Integer, primary_key=True, index=True)
+    code= Column(String(50), unique=True, nullable=False)
+    name= Column(String(100), nullable=False)
+    description= Column(String(255))
+    is_active = Column(Boolean, nullable=False, default=True)
+
+class Permission(Base):
+    __tablename__ = "permissions"
+    id = Column(Integer, primary_key=True, index=True)
+    code= Column(String(50), unique=True, nullable=False)
+    name= Column(String(100), nullable=False)
+    description= Column(String(255))
+    is_active = Column(Boolean, nullable=False, default=True)

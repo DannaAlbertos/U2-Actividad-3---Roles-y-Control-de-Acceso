@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 from jose import jwt, JWTError
 import bcrypt
 from decimal import Decimal
-from .database import engine, Base, get_db
+from .database import engine, Base, get_db, SessionLocal
 from . import models
 
 # --- SEGURIDAD ---
@@ -36,6 +36,42 @@ def get_current_user_from_token(token: str, db: Session):
         return None
 
 Base.metadata.create_all(bind=engine)
+# Parte 1 de la actividad 3 - Datos iniciales: roles y permisos
+
+ROLES_INICIALES = [
+    ("ADMINISTRADOR", "Administrador", "Administrador principal de la empresa"),
+    ("CONTADOR", "Contador", "Arma cuentas y conceptos, también registra los movimientos"),
+    ("CAPTURISTA", "Capturista", "Registra los movimientos"),
+    ("CONSULTA", "Consulta", "Solo lee"),
+] 
+
+PERMISOS_INICIALES = [
+    ("company.users.read", "Ver usuarios", "Ver las membresías de la empresa"),
+    ("company.users.write", "Administrar usuarios", "Crear usuarios y desactivar membresías"),
+    ("accounts.read", "Consultar cuentas", "Consultar cuentas"),
+    ("accounts.write", "Crear cuentas", "Crear cuentas"),
+    ("concepts.read", "Consultar conceptos", "Consultar conceptos"),
+    ("concepts.write", "Crear conceptos", "Crear conceptos y asignarlos a una cuenta"),
+    ("transactions.read", "Consultar movimientos", "Consultar movimientos"),
+    ("transactions.write", "Registrar movimientos", "Registrar un ingreso o un egreso"),
+    ("roles.read", "Ver roles", "Ver roles y la matriz de permisos"),
+    ("roles.write", "Administrar roles", "Asignar o quitar permisos de un rol y asignar un rol a una membresía"),
+]
+
+def seed_roles_y_permisos():
+    db = SessionLocal()
+    try:
+        if db.query(models.Role).count() == 0:
+            for code, name, desc in ROLES_INICIALES:
+                db.add(models.Role(code=code, name=name, description=dec))
+        if db.query(models.Permission).count()== 0:
+            for code, name, desc in PERMISOS_INICIALES:
+                db.add(models.Permission(code=code, name=name, description=desc))
+        db.commit()
+    finally:
+        db.close()
+seed_roles_y_permisos()
+
 
 # --- ENUMS ---
 AccountType = strawberry.enum(models.AccountTypeEnum, name="AccountType")
