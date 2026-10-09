@@ -154,6 +154,23 @@ class AuthPayload:
     token: str
     tokenType: str
 
+# Class Role
+@strawberry.type
+class Role:
+    id: strawberry.ID
+    code: str
+    name: str
+    description: Optional[str]
+    isActive: bool
+
+@strawberry.type
+class Permission:
+    id: strawberry.ID
+    code: str
+    name: str
+    description: Optional[str]
+    isActive: bool
+
 # --- INPUTS ---
 @strawberry.input
 class CreateAccountInput:
@@ -195,9 +212,28 @@ class LoginInput:
     email: str
     password: str
 
+# Clase CreateRoleInput
+@strawberry.input
+class CreateRoleInput:
+    code: str
+    name: str
+    description: Optional[str]
+
+# Clase CreatePermission Input
+@strawberry.input
+class CreatePermissionInput:
+    code: str
+    name: str
+    description: Optional[str] 
 # --- DEPENDENCIAS ---
 async def get_context(request: Request, db: Session = Depends(get_db)):
     return {"db": db, "request": request}
+# Implementando los métodos convertidores
+def role_to_gql(r: models.Role) -> Role:
+    return Role(id=r.id, code=r.code, name=r.name, description=r.description, isActive=r.is_active)
+
+def permission_to_gql(p: models.Permission) -> Permission:
+    return Permission(id=p.id, code=p.code, name=p.name, description=p.description, isActive=p.is_active)
 
 # --- QUERIES ---
 @strawberry.type
@@ -248,13 +284,38 @@ class Query:
             gql_u = User(id=u.id, name=u.name, email=u.email)
             res.append(Transaction(**{k: getattr(t, k) for k in t.__dict__.keys() if k in Transaction.__annotations__ and k not in ['account', 'concept', 'capturedByUser']}, accountId=t.account_id, conceptId=t.concept_id, transactionType=TransactionType(t.transaction_type.value), capturedBy=t.captured_by, account=gql_a, concept=gql_c, capturedByUser=gql_u))
         return res
+
+    # Implementación de campos (roles, rol y permisos)
+
+    # Roles
+    @strawberry.field
+    def roles(self, info: strawberry.Info, activeOnly: Optional[bool] = None) -> List[Role]:
+        db = info.context["db"]
+        q = db.query(models.Role)
+        if activeOnly: q = q.filter(models.Role.is_active == True)
+        return [role_to_gql(r) for r in q.order_by(models.Role.id).all()]
+
+    # Rol
+    @strawberry.field
+    def role(self, info: strawberry.Info, id: strawberry.ID) -> Optional[Role]:
+        db = info.context["db"]
+        r = db.query(models.Role).filter(models.Role.id == id).first()
+        return role_to_gql(r) if r else None
+
+    # Permisos
+    @strawberry.field
+    def permissions(self, info: strawberry.Info, activeOnly: Optional[bool] = None) -> List[Permission]:
+        db = info.context["db"]
+        q = db.query(models.Permission)
+        if activeOnly: q = q.filter(models.Permission.is_active == True)
+        return [permission_to_gql(p) for p in q.order_by(models.Permission.id).all()]
     
     @strawberry.field
     def users(self, info: strawberry.Info) -> List[User]:
         db = info.context["db"]
         db_users = db.query(models.User).all()
         return [User(id=u.id, name=u.name, email=u.email) for u in db_users]
-
+    
 # --- MUTATIONS ---
 @strawberry.type
 class Mutation:
@@ -267,7 +328,42 @@ class Mutation:
         if not user or not verify_password(input.password, user.hashed_password):
             raise Exception("Credenciales incorrectas")
         return AuthPayload(token=create_access_token(data={"sub": user.email}), tokenType="Bearer")
+    
+    # CreateRole
+    @strawberry.mutation
+    def createRole(self, info: strawberry.Info, input: CreateRoleInput) -> Role:
+        db = info.context["db"]
+        if db.query(models.Role).filter(models.Role.code == input.code).first():
+            raise Exception("Ya existe un rol con ese código")
+        r = models.Role(code=input.code, name=input.name, description=input.description)
+        db.add(r)
+        db.commit()
+        db.refresh(r)
+        return role_to_gql(r)
 
+    # Desactivar un rol
+    @strawberry.mutation
+    def deactivateRole(self, info: strawberry.Info, id: strawberry.ID) -> Role:
+        db = info.context["db"]
+        r = db.query(models.Role).filter(models.Role.id == id).first()
+        if not r: raise Exception("Rol no encontrado")
+        r.is_active = False
+        db.commit()
+        db.refresh(r)
+        return role_to_gql(r)
+
+    # Crear un permiso
+    @strawberry.mutation
+    def createPermission(self, info: strawberry.Info, input: CreatePermissionInput) -> Permission:
+        db = info.context["db"]
+        if db.query(models.Permission).filter(models.Permission.code == input.code).first():
+            raise Exception("Ya existe un permiso con ese código")
+        p = models.Permission(code=input.code, name=input.name, description=input.description)
+        db.add(p)
+        db.commit()
+        db.refresh(p)
+        return permission_to_gql(p)
+    
     @strawberry.mutation
     def createAccount(self, info: strawberry.Info, input: CreateAccountInput) -> Account:
         db = info.context["db"]
