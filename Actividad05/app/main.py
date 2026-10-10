@@ -357,20 +357,48 @@ def role_to_gql(r: models.Role) -> Role:
 def permission_to_gql(p: models.Permission) -> Permission:
     return Permission(id=p.id, code=p.code, name=p.name, description=p.description, isActive=p.is_active)
 
+def exigir_permiso(db: Session, company_user_id: int, codigo: str) -> None:
+    asignacion = (
+        db.query(models.CompanyUserRole)
+        .filter(
+            models.CompanyUserRole.company_user_id == company_user_id,
+            models.CompanyUserRole.is_active.is_(True)
+        )
+        .first()
+    )
+    if asignacion is None:
+        raise Exception("La membresía no tiene un rol activo")
+    
+    permitido = (
+        db.query(models.RolePermission)
+        .join(models.Permission)
+        .filter(
+            models.RolePermission.role_id == asignacion.role_id,
+            models.RolePermission.is_active.is_(True),
+            models.Permission.code == codigo,
+            models.Permission.is_active.is_(True)
+        )
+        .first()
+    )
+    if permitido is None:
+        raise Exception(f"El rol no tiene el permiso {codigo}")
+
 # --- QUERIES ---
 @strawberry.type
 class Query:
     @strawberry.field
-    def accounts(self, info: strawberry.Info, companyId: strawberry.ID, accountType: Optional[AccountType] = None, activeOnly: Optional[bool] = None) -> List[Account]:
+    def accounts(self, info: strawberry.Info, companyId: strawberry.ID, actorCompanyUserId: strawberry.ID, accountType: Optional[AccountType] = None, activeOnly: Optional[bool] = None) -> List[Account]:
         db = info.context["db"]
+        exigir_permiso(db, int(actorCompanyUserId), "accounts.read")
         q = db.query(models.Account).filter(models.Account.company_id == companyId)
         if accountType: q = q.filter(models.Account.account_type == accountType.value)
         if activeOnly: q = q.filter(models.Account.is_active == True)
         return [Account(**{k: getattr(a, k) for k in a.__dict__.keys() if k in Account.__annotations__ and k != 'company'}, companyId=a.company_id, accountType=AccountType(a.account_type.value), company=Company(id=a.company.id, name=a.company.name, isActive=a.company.is_active)) for a in q.all()]
 
     @strawberry.field
-    def concepts(self, info: strawberry.Info, companyId: strawberry.ID, conceptType: Optional[ConceptType] = None, activeOnly: Optional[bool] = None) -> List[Concept]:
+    def concepts(self, info: strawberry.Info, companyId: strawberry.ID, actorCompanyUserId: strawberry.ID, conceptType: Optional[ConceptType] = None, activeOnly: Optional[bool] = None) -> List[Concept]:
         db = info.context["db"]
+        exigir_permiso(db, int(actorCompanyUserId), "concepts.read")
         q = db.query(models.Concept).filter(models.Concept.company_id == companyId)
         if conceptType: q = q.filter(models.Concept.concept_type == conceptType.value)
         if activeOnly: q = q.filter(models.Concept.is_active == True)
@@ -390,8 +418,9 @@ class Query:
         return res
 
     @strawberry.field
-    def transactions(self, info: strawberry.Info, accountId: Optional[strawberry.ID] = None, transactionType: Optional[TransactionType] = None, limit: Optional[int] = 50, offset: Optional[int] = 0) -> List[Transaction]:
+    def transactions(self, info: strawberry.Info, actorCompanyUserId: strawberry.ID, accountId: Optional[strawberry.ID] = None, transactionType: Optional[TransactionType] = None, limit: Optional[int] = 50, offset: Optional[int] = 0) -> List[Transaction]:
         db = info.context["db"]
+        exigir_permiso(db, int(actorCompanyUserId), "transactions.read")
         q = db.query(models.Transaction).filter(models.Transaction.is_active == True)
         if accountId: q = q.filter(models.Transaction.account_id == accountId)
         if transactionType: q = q.filter(models.Transaction.transaction_type == transactionType.value)
@@ -549,8 +578,9 @@ class Mutation:
         return permission_to_gql(p)
     
     @strawberry.mutation
-    def createAccount(self, info: strawberry.Info, input: CreateAccountInput) -> Account:
+    def createAccount(self, info: strawberry.Info, input: CreateAccountInput, actorCompanyUserId: strawberry.ID) -> Account:
         db = info.context["db"]
+        exigir_permiso(db, int(actorCompanyUserId), "accounts.write")
         # Validar duplicidad
         existing = db.query(models.Account).filter(models.Account.company_id == input.companyId, models.Account.name == input.name).first()
         if existing: raise Exception("La cuenta ya existe para esta empresa")
@@ -559,11 +589,12 @@ class Mutation:
         db.add(db_a)
         db.commit()
         db.refresh(db_a)
-        return Query.accounts(None, info, companyId=input.companyId)[-1]
+        return Query.accounts(None, info, companyId=input.companyId, actorCompanyUserId=actorCompanyUserId)[-1]
 
     @strawberry.mutation
-    def createConcept(self, info: strawberry.Info, input: CreateConceptInput) -> Concept:
+    def createConcept(self, info: strawberry.Info, input: CreateConceptInput, actorCompanyUserId: strawberry.ID) -> Concept:
         db = info.context["db"]
+        exigir_permiso(db, int(actorCompanyUserId), "concepts.write")
         existing = db.query(models.Concept).filter(models.Concept.company_id == input.companyId, models.Concept.name == input.name).first()
         if existing: raise Exception("El concepto ya existe para esta empresa")
         
@@ -571,11 +602,12 @@ class Mutation:
         db.add(db_c)
         db.commit()
         db.refresh(db_c)
-        return Query.concepts(None, info, companyId=input.companyId)[-1]
+        return Query.concepts(None, info, companyId=input.companyId, actorCompanyUserId=actorCompanyUserId)[-1]
 
     @strawberry.mutation
-    def assignConceptToAccount(self, info: strawberry.Info, input: AssignConceptToAccountInput) -> AccountConcept:
+    def assignConceptToAccount(self, info: strawberry.Info, input: AssignConceptToAccountInput, actorCompanyUserId: strawberry.ID) -> AccountConcept:
         db = info.context["db"]
+        exigir_permiso(db, int(actorCompanyUserId), "concepts.write")
         existing = db.query(models.AccountConcept).filter(models.AccountConcept.account_id == input.accountId, models.AccountConcept.concept_id == input.conceptId).first()
         if existing:
             if not existing.is_active:
@@ -599,8 +631,9 @@ class Mutation:
         return True
 
     @strawberry.mutation
-    def createTransaction(self, info: strawberry.Info, input: CreateTransactionInput) -> Transaction:
+    def createTransaction(self, info: strawberry.Info, input: CreateTransactionInput, actorCompanyUserId: strawberry.ID) -> Transaction:
         db = info.context["db"]
+        exigir_permiso(db, int(actorCompanyUserId), "transactions.write")
         request = info.context["request"]
         
         # Validación: Usuario autenticado
@@ -636,7 +669,7 @@ class Mutation:
         db.commit()
         db.refresh(db_t)
         
-        return Query.transactions(None, info, accountId=input.accountId)[-1]
+        return Query.transactions(None, info, accountId=input.accountId, actorCompanyUserId=actorCompanyUserId)[-1]
 
     @strawberry.mutation
     def deleteTransaction(self, info: strawberry.Info, id: strawberry.ID) -> Transaction:
@@ -654,10 +687,12 @@ class Mutation:
         self,
         info: strawberry.Info,
         roleId: strawberry.ID,
-        permissionId: strawberry.ID
+        permissionId: strawberry.ID,
+        actorCompanyUserId: strawberry.ID
     ) -> RolePermissionType:
 
         db = info.context["db"]
+        exigir_permiso(db, int(actorCompanyUserId), "roles.write")
 
         # 1. Verificar que el rol exista
         role = db.query(models.Role).filter(
@@ -754,9 +789,11 @@ class Mutation:
         self,
         info: strawberry.Info,
         companyUserId: strawberry.ID,
-        roleId: strawberry.ID
+        roleId: strawberry.ID,
+        actorCompanyUserId: strawberry.ID
     ) -> bool:
         db = info.context["db"]
+        exigir_permiso(db, int(actorCompanyUserId), "roles.write")
 
         # 1. Comprobar que existe la membresía del usuario en la empresa.
         company_user = (
