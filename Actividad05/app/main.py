@@ -151,8 +151,6 @@ def seed_role_permissions():
         db.close()
 
 
-seed_role_permissions()
-
 ##
 
 
@@ -169,6 +167,7 @@ def seed_roles_y_permisos():
     finally:
         db.close()
 seed_roles_y_permisos()
+seed_role_permissions()
 
 
 # --- ENUMS ---
@@ -188,6 +187,16 @@ class User:
     id: strawberry.ID
     name: str
     email: str
+
+
+@strawberry.type
+class CompanyUserType:
+    id: strawberry.ID
+    companyId: strawberry.ID
+    userId: strawberry.ID
+    isAdmin: bool
+    isActive: bool
+
 
 @strawberry.type
 class Account:
@@ -469,6 +478,27 @@ class Query:
         db = info.context["db"]
         db_users = db.query(models.User).all()
         return [User(id=u.id, name=u.name, email=u.email) for u in db_users]
+
+    
+    
+    @strawberry.field
+    def companyUsers(self, info: strawberry.Info) -> List[CompanyUserType]:
+        db = info.context["db"]
+
+        memberships = db.query(models.CompanyUser).all()
+
+        return [
+            CompanyUserType(
+                id=str(membership.id),
+                companyId=str(membership.company_id),
+                userId=str(membership.user_id),
+                isAdmin=membership.is_admin,
+                isActive=membership.is_active
+            )
+            for membership in memberships
+        ]
+
+
     
 # --- MUTATIONS ---
 @strawberry.type
@@ -718,6 +748,168 @@ class Mutation:
         db.commit()
 
         return True
+    
+    @strawberry.mutation
+    def assignRole(
+        self,
+        info: strawberry.Info,
+        companyUserId: strawberry.ID,
+        roleId: strawberry.ID
+    ) -> bool:
+        db = info.context["db"]
+
+        # 1. Comprobar que existe la membresía del usuario en la empresa.
+        company_user = (
+            db.query(models.CompanyUser)
+            .filter(models.CompanyUser.id == companyUserId)
+            .first()
+        )
+
+        if not company_user:
+            raise Exception("La membresía del usuario no existe")
+
+        if not company_user.is_active:
+            raise Exception("La membresía del usuario está inactiva")
+
+        # 2. Comprobar que existe el rol y que está activo.
+        role = (
+            db.query(models.Role)
+            .filter(models.Role.id == roleId)
+            .first()
+        )
+
+        if not role:
+            raise Exception("El rol no existe")
+
+        if not role.is_active:
+            raise Exception("El rol está inactivo")
+
+        try:
+            # 3. Buscar la asignación de ese rol a esa membresía.
+            assignment = (
+                db.query(models.CompanyUserRole)
+                .filter(
+                    models.CompanyUserRole.company_user_id == company_user.id,
+                    models.CompanyUserRole.role_id == role.id
+                )
+                .first()
+            )
+
+            # 4. Desactivar los demás roles activos de la membresía.
+            active_assignments = (
+                db.query(models.CompanyUserRole)
+                .filter(
+                    models.CompanyUserRole.company_user_id == company_user.id,
+                    models.CompanyUserRole.is_active == True
+                )
+                .all()
+            )
+
+            for current_assignment in active_assignments:
+                current_assignment.is_active = False
+
+            # 5. Activar el rol solicitado o crear su asignación.
+            if assignment:
+                assignment.is_active = True
+            else:
+                assignment = models.CompanyUserRole(
+                    company_user_id=company_user.id,
+                    role_id=role.id,
+                    is_active=True
+                )
+                db.add(assignment)
+
+            # 6. Guardar todos los cambios.
+            db.commit()
+
+            return True
+
+        except Exception:
+            db.rollback()
+            raise
+    
+    @strawberry.mutation
+    def createCompanyAdmin(
+        self,
+        info: strawberry.Info,
+        companyName: str,
+        adminName: str,
+        adminEmail: str,
+        adminPassword: str
+    ) -> bool:
+        db = info.context["db"]
+
+        try:
+            # 1. Validar que el correo no esté registrado
+            existing_user = db.query(models.User).filter(
+                models.User.email == adminEmail
+            ).first()
+
+            if existing_user:
+                raise Exception("El correo ya está registrado")
+
+            # 2. Buscar el rol ADMINISTRADOR
+            admin_role = db.query(models.Role).filter(
+                models.Role.code == "ADMINISTRADOR",
+                models.Role.is_active == True
+            ).first()
+
+            if not admin_role:
+                raise Exception(
+                    "No existe un rol ADMINISTRADOR activo"
+                )
+
+            # 3. Crear la empresa
+            company = models.Company(
+                name=companyName,
+                is_active=True
+            )
+            db.add(company)
+            db.flush()
+
+            # 4. Crear el usuario administrador
+            hashed_password = bcrypt.hashpw(
+                adminPassword.encode("utf-8"),
+                bcrypt.gensalt()
+            ).decode("utf-8")
+
+            user = models.User(
+                name=adminName,
+                email=adminEmail,
+                hashed_password=hashed_password,
+                is_active=True
+            )
+            db.add(user)
+            db.flush()
+
+            # 5. Vincular al usuario con la empresa
+            membership = models.CompanyUser(
+                company_id=company.id,
+                user_id=user.id,
+                is_admin=True,
+                is_active=True
+            )
+            db.add(membership)
+            db.flush()
+
+            # 6. Asignar el rol a la membresía
+            company_user_role = models.CompanyUserRole(
+                company_user_id=membership.id,
+                role_id=admin_role.id,
+                is_active=True
+            )
+            db.add(company_user_role)
+
+            # 7. Confirmar todos los cambios juntos
+            db.commit()
+
+            return True
+
+        except Exception:
+            db.rollback()
+            raise
+
+
 
 
 
