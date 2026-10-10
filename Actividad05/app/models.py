@@ -1,4 +1,5 @@
-from sqlalchemy import Column, Integer, String, Boolean, DateTime, ForeignKey, Numeric, Enum as SQLEnum
+from sqlalchemy import (Column, Integer, String, Boolean, DateTime,ForeignKey, Numeric, Enum as SQLEnum, UniqueConstraint
+)
 from sqlalchemy.orm import relationship
 from datetime import datetime
 import enum
@@ -146,3 +147,66 @@ class Permission(Base):
     name= Column(String(100), nullable=False)
     description= Column(String(255))
     is_active = Column(Boolean, nullable=False, default=True)
+
+
+
+# Relación entre roles y permisos 
+
+class RolePermission(Base):
+    __tablename__ = "role_permissions"
+
+    id = Column(Integer, primary_key=True, index=True)
+
+    role_id = Column(
+        Integer,
+        ForeignKey("roles.id"),
+        nullable=False
+    )
+
+    permission_id = Column(
+        Integer,
+        ForeignKey("permissions.id"),
+        nullable=False
+    )
+
+    is_active = Column(Boolean, nullable=False, default=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    __table_args__ = (
+        UniqueConstraint("role_id","permission_id",name="uq_role_permission"
+        ),
+    )
+
+    role = relationship("Role")
+    permission = relationship("Permission")
+
+
+# Relación entre membresías y roles 
+
+class CompanyUserRole(Base):
+    __tablename__ = "company_user_roles"
+
+    id = Column(Integer, primary_key=True, index=True)
+
+    company_user_id = Column(
+        Integer,
+        ForeignKey("company_users.id"),
+        nullable=False
+    )
+
+    role_id = Column(
+        Integer,
+        ForeignKey("roles.id"),
+        nullable=False
+    )
+
+    is_active = Column(Boolean, nullable=False, default=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    __table_args__ = (
+        UniqueConstraint("company_user_id","role_id",name="uq_company_user_role"
+        ),
+    )
+
+    company_user = relationship("CompanyUser")
+    role = relationship("Role")

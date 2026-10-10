@@ -58,6 +58,104 @@ PERMISOS_INICIALES = [
     ("roles.write", "Administrar roles", "Asignar o quitar permisos de un rol y asignar un rol a una membresía"),
 ]
 
+##
+
+#Matriz inicial de permisos por rol 
+
+MATRIZ_PERMISOS = {
+    "ADMINISTRADOR": [
+        "company.users.read",
+        "company.users.write",
+        "accounts.read",
+        "accounts.write",
+        "concepts.read",
+        "concepts.write",
+        "transactions.read",
+        "transactions.write",
+        "roles.read",
+        "roles.write",
+    ],
+    "CONTADOR": [
+        "company.users.read",
+        "accounts.read",
+        "accounts.write",
+        "concepts.read",
+        "concepts.write",
+        "transactions.read",
+        "transactions.write",
+        "roles.read",
+    ],
+    "CAPTURISTA": [
+        "accounts.read",
+        "concepts.read",
+        "transactions.read",
+        "transactions.write",
+    ],
+    "CONSULTA": [
+        "company.users.read",
+        "accounts.read",
+        "concepts.read",
+        "transactions.read",
+    ],
+}
+
+
+def seed_role_permissions():
+    db = SessionLocal()
+
+    try:
+        for role_code, permission_codes in MATRIZ_PERMISOS.items():
+
+            # Buscar el rol por su código
+            role = db.query(models.Role).filter(
+                models.Role.code == role_code
+            ).first()
+
+            if role is None:
+                continue
+
+            # Si el rol ya tiene asignaciones, no volver a cargarlas
+            existing = db.query(models.RolePermission).filter(
+                models.RolePermission.role_id == role.id
+            ).first()
+
+            if existing:
+                continue
+
+            # Buscar y asignar cada permiso de la matriz
+            for permission_code in permission_codes:
+                permission = db.query(models.Permission).filter(
+                    models.Permission.code == permission_code
+                ).first()
+
+                if permission is None:
+                    raise ValueError(
+                        f"No existe el permiso: {permission_code}"
+                    )
+
+                assignment = models.RolePermission(
+                    role_id=role.id,
+                    permission_id=permission.id,
+                    is_active=True,
+                )
+
+                db.add(assignment)
+
+        db.commit()
+
+    except Exception:
+        db.rollback()
+        raise
+
+    finally:
+        db.close()
+
+
+seed_role_permissions()
+
+##
+
+
 def seed_roles_y_permisos():
     db = SessionLocal()
     try:
