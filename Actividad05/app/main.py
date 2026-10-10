@@ -269,6 +269,21 @@ class Permission:
     description: Optional[str]
     isActive: bool
 
+
+
+# Tipo GraphQL para la relación rol-permiso
+
+@strawberry.type
+class RolePermissionType:
+    id: strawberry.ID
+    roleId: strawberry.ID
+    permissionId: strawberry.ID
+    isActive: bool
+    createdAt: datetime
+    role: Role
+    permission: Permission
+
+
 # --- INPUTS ---
 @strawberry.input
 class CreateAccountInput:
@@ -407,6 +422,47 @@ class Query:
         q = db.query(models.Permission)
         if activeOnly: q = q.filter(models.Permission.is_active == True)
         return [permission_to_gql(p) for p in q.order_by(models.Permission.id).all()]
+    
+    
+    # Consultar permisos de un rol 
+
+    @strawberry.field
+    def rolePermissions(
+        self,
+        info: strawberry.Info,
+        roleId: strawberry.ID
+    ) -> List[RolePermissionType]:
+
+        db = info.context["db"]
+
+        assignments = (
+            db.query(models.RolePermission)
+            .filter(
+                models.RolePermission.role_id == roleId,
+                models.RolePermission.is_active == True
+            )
+            .all()
+        )
+
+        result = []
+
+        for assignment in assignments:
+            result.append(
+                RolePermissionType(
+                    id=str(assignment.id),
+                    roleId=str(assignment.role_id),
+                    permissionId=str(assignment.permission_id),
+                    isActive=assignment.is_active,
+                    createdAt=assignment.created_at,
+                    role=role_to_gql(assignment.role),
+                    permission=permission_to_gql(
+                        assignment.permission
+                    )
+                )
+            )
+
+        return result
+
     
     @strawberry.field
     def users(self, info: strawberry.Info) -> List[User]:
