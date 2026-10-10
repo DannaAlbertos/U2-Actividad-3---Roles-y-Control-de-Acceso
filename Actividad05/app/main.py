@@ -616,6 +616,111 @@ class Mutation:
         t.is_active = False
         db.commit()
         return Query.transactions(None, info, accountId=t.account_id)[0]
+    
+    #  Asignar un permiso a un rol 
+
+    @strawberry.mutation
+    def assignPermissionToRole(
+        self,
+        info: strawberry.Info,
+        roleId: strawberry.ID,
+        permissionId: strawberry.ID
+    ) -> RolePermissionType:
+
+        db = info.context["db"]
+
+        # 1. Verificar que el rol exista
+        role = db.query(models.Role).filter(
+            models.Role.id == roleId
+        ).first()
+
+        if not role:
+            raise Exception("Rol no encontrado")
+
+        # 2. Verificar que el permiso exista
+        permission = db.query(models.Permission).filter(
+            models.Permission.id == permissionId
+        ).first()
+
+        if not permission:
+            raise Exception("Permiso no encontrado")
+
+        # 3. Buscar si la relación ya existe
+        assignment = db.query(models.RolePermission).filter(
+            models.RolePermission.role_id == roleId,
+            models.RolePermission.permission_id == permissionId
+        ).first()
+
+        if assignment:
+            if assignment.is_active:
+                raise Exception(
+                    "El permiso ya está asignado a este rol"
+                )
+
+            # Si existía, pero estaba desactivada, reactivarla
+            assignment.is_active = True
+
+        else:
+            # 4. Crear una nueva relación
+            assignment = models.RolePermission(
+                role_id=role.id,
+                permission_id=permission.id,
+                is_active=True
+            )
+
+            db.add(assignment)
+
+        # 5. Guardar y recuperar el registro
+        db.commit()
+        db.refresh(assignment)
+
+        return RolePermissionType(
+            id=str(assignment.id),
+            roleId=str(assignment.role_id),
+            permissionId=str(assignment.permission_id),
+            isActive=assignment.is_active,
+            createdAt=assignment.created_at,
+            role=role_to_gql(role),
+            permission=permission_to_gql(permission)
+        )
+    
+    # Desactivar un permiso de un rol
+
+    @strawberry.mutation
+    def removePermissionFromRole(
+        self,
+        info: strawberry.Info,
+        roleId: strawberry.ID,
+        permissionId: strawberry.ID
+    ) -> bool:
+
+        db = info.context["db"]
+
+        # Buscar la relación entre el rol y el permiso
+        assignment = db.query(models.RolePermission).filter(
+            models.RolePermission.role_id == roleId,
+            models.RolePermission.permission_id == permissionId
+        ).first()
+
+        if not assignment:
+            raise Exception(
+                "La asignación entre el rol y el permiso no existe"
+            )
+
+        if not assignment.is_active:
+            raise Exception(
+                "La asignación ya está desactivada"
+            )
+
+        # Desactivar sin eliminar el registro
+        assignment.is_active = False
+
+        db.commit()
+
+        return True
+
+
+
 
 schema = strawberry.Schema(query=Query, mutation=Mutation)
 graphql_app = GraphQLRouter(schema, context_getter=get_context)
