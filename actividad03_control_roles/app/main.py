@@ -357,6 +357,58 @@ def role_to_gql(r: models.Role) -> Role:
 def permission_to_gql(p: models.Permission) -> Permission:
     return Permission(id=p.id, code=p.code, name=p.name, description=p.description, isActive=p.is_active)
 
+def account_to_gql(a: models.Account) -> Account:
+    return Account(
+        id=a.id,
+        companyId=a.company_id,
+        accountType=AccountType(a.account_type.value),
+        name=a.name,
+        bankName=a.bank_name,
+        accountNumber=a.account_number,
+        clabe=a.clabe,
+        cardLastDigits=a.card_last_digits,
+        shortDescription=a.short_description,
+        longDescription=a.long_description,
+        isActive=a.is_active,
+        createdAt=a.created_at,
+        updatedAt=a.updated_at,
+        company=Company(id=a.company.id, name=a.company.name, isActive=a.company.is_active),
+    )
+
+def concept_to_gql(c: models.Concept) -> Concept:
+    return Concept(
+        id=c.id,
+        companyId=c.company_id,
+        conceptType=ConceptType(c.concept_type.value),
+        name=c.name,
+        shortDescription=c.short_description,
+        longDescription=c.long_description,
+        isActive=c.is_active,
+        createdAt=c.created_at,
+        updatedAt=c.updated_at,
+    )
+
+def transaction_to_gql(t: models.Transaction) -> Transaction:
+    user = t.captured_by_user
+    return Transaction(
+        id=t.id,
+        accountId=t.account_id,
+        conceptId=t.concept_id,
+        transactionType=TransactionType(t.transaction_type.value),
+        amount=t.amount,
+        transactionDate=t.transaction_date,
+        capturedAt=t.captured_at,
+        capturedBy=t.captured_by,
+        shortDescription=t.short_description,
+        longDescription=t.long_description,
+        isActive=t.is_active,
+        createdAt=t.created_at,
+        updatedAt=t.updated_at,
+        account=account_to_gql(t.account),
+        concept=concept_to_gql(t.concept),
+        capturedByUser=User(id=user.id, name=user.name, email=user.email),
+    )
+
 def exigir_permiso(db: Session, company_user_id: int, codigo: str) -> None:
     asignacion = (
         db.query(models.CompanyUserRole)
@@ -393,7 +445,7 @@ class Query:
         q = db.query(models.Account).filter(models.Account.company_id == companyId)
         if accountType: q = q.filter(models.Account.account_type == accountType.value)
         if activeOnly: q = q.filter(models.Account.is_active == True)
-        return [Account(**{k: getattr(a, k) for k in a.__dict__.keys() if k in Account.__annotations__ and k != 'company'}, companyId=a.company_id, accountType=AccountType(a.account_type.value), company=Company(id=a.company.id, name=a.company.name, isActive=a.company.is_active)) for a in q.all()]
+        return [account_to_gql(a) for a in q.all()]
 
     @strawberry.field
     def concepts(self, info: strawberry.Info, companyId: strawberry.ID, actorCompanyUserId: strawberry.ID, conceptType: Optional[ConceptType] = None, activeOnly: Optional[bool] = None) -> List[Concept]:
@@ -402,7 +454,7 @@ class Query:
         q = db.query(models.Concept).filter(models.Concept.company_id == companyId)
         if conceptType: q = q.filter(models.Concept.concept_type == conceptType.value)
         if activeOnly: q = q.filter(models.Concept.is_active == True)
-        return [Concept(**{k: getattr(c, k) for k in c.__dict__.keys() if k in Concept.__annotations__}, companyId=c.company_id, conceptType=ConceptType(c.concept_type.value)) for c in q.all()]
+        return [concept_to_gql(c) for c in q.all()]
 
     @strawberry.field
     def accountConcepts(self, info: strawberry.Info, accountId: strawberry.ID) -> List[AccountConcept]:
@@ -412,8 +464,8 @@ class Query:
         for ac in q.all():
             a = ac.account
             c = ac.concept
-            gql_a = Account(**{k: getattr(a, k) for k in a.__dict__.keys() if k in Account.__annotations__ and k != 'company'}, companyId=a.company_id, accountType=AccountType(a.account_type.value), company=Company(id=a.company.id, name=a.company.name, isActive=a.company.is_active))
-            gql_c = Concept(**{k: getattr(c, k) for k in c.__dict__.keys() if k in Concept.__annotations__}, companyId=c.company_id, conceptType=ConceptType(c.concept_type.value))
+            gql_a = account_to_gql(a)
+            gql_c = concept_to_gql(c)
             res.append(AccountConcept(id=ac.id, accountId=ac.account_id, conceptId=ac.concept_id, isActive=ac.is_active, createdAt=ac.created_at, account=gql_a, concept=gql_c))
         return res
 
@@ -425,16 +477,7 @@ class Query:
         if accountId: q = q.filter(models.Transaction.account_id == accountId)
         if transactionType: q = q.filter(models.Transaction.transaction_type == transactionType.value)
         q = q.offset(offset).limit(limit)
-        res = []
-        for t in q.all():
-            a = t.account
-            c = t.concept
-            u = t.captured_by_user
-            gql_a = Account(**{k: getattr(a, k) for k in a.__dict__.keys() if k in Account.__annotations__ and k != 'company'}, companyId=a.company_id, accountType=AccountType(a.account_type.value), company=Company(id=a.company.id, name=a.company.name, isActive=a.company.is_active))
-            gql_c = Concept(**{k: getattr(c, k) for k in c.__dict__.keys() if k in Concept.__annotations__}, companyId=c.company_id, conceptType=ConceptType(c.concept_type.value))
-            gql_u = User(id=u.id, name=u.name, email=u.email)
-            res.append(Transaction(**{k: getattr(t, k) for k in t.__dict__.keys() if k in Transaction.__annotations__ and k not in ['account', 'concept', 'capturedByUser']}, accountId=t.account_id, conceptId=t.concept_id, transactionType=TransactionType(t.transaction_type.value), capturedBy=t.captured_by, account=gql_a, concept=gql_c, capturedByUser=gql_u))
-        return res
+        return [transaction_to_gql(t) for t in q.all()]
 
     # Implementación de campos (roles, rol y permisos)
 
