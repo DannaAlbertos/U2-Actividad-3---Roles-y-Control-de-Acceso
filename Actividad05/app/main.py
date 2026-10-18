@@ -8,9 +8,6 @@ from sqlalchemy.orm import Session
 from jose import jwt, JWTError
 import bcrypt
 from decimal import Decimal
-from Actividad05.app.database import engine, Base, get_db, SessionLocal
-import Actividad05.app.models as models
-import app.models as models
 
 # --- SEGURIDAD ---
 SECRET_KEY = "clave_super_secreta_jwt"
