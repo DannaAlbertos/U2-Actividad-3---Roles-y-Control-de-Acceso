@@ -1,5 +1,6 @@
 from fastapi import FastAPI, Depends, Request, HTTPException
 import strawberry
+import enum
 from strawberry.fastapi import GraphQLRouter
 from typing import Optional, List
 from datetime import datetime, timedelta
@@ -7,8 +8,7 @@ from sqlalchemy.orm import Session
 from jose import jwt, JWTError
 import bcrypt
 from decimal import Decimal
-from app.database import engine, Base, get_db, SessionLocal
-import app.models as models
+
 # --- SEGURIDAD ---
 SECRET_KEY = "clave_super_secreta_jwt"
 ALGORITHM = "HS256"
@@ -174,6 +174,14 @@ AccountType = strawberry.enum(models.AccountTypeEnum, name="AccountType")
 ConceptType = strawberry.enum(models.ConceptTypeEnum, name="ConceptType")
 TransactionType = strawberry.enum(models.TransactionTypeEnum, name="TransactionType")
 
+@strawberry.enum
+class PermissionResource(enum.Enum):
+    COMPANY_USERS = "company.users"
+    ACCOUNTS = "accounts"
+    CONCEPTS = "concepts"
+    TRANSACTIONS = "transactions"
+    ROLES = "roles"
+
 # --- TIPOS ---
 @strawberry.type
 class Company:
@@ -275,8 +283,6 @@ class Permission:
     name: str
     description: Optional[str]
     isActive: bool
-
-
 
 # Tipo GraphQL para la relación rol-permiso
 
@@ -531,6 +537,29 @@ class Query:
         if activeOnly: q = q.filter(models.Permission.is_active == True)
         return [permission_to_gql(p) for p in q.order_by(models.Permission.id).all()]
 
+    @strawberry.field
+    def permissionCatalog(
+        self,
+        info: strawberry.Info,
+        actorCompanyUserId: strawberry.ID,
+        resource: Optional[PermissionResource] = None,
+    ) -> List[Permission]:
+        db = info.context["db"]
+        exigir_permiso(db, int(actorCompanyUserId), "roles.read")
+
+        consulta = db.query(models.Permission).filter(
+            models.Permission.is_active == True
+        )
+
+        if resource is not None:
+            consulta = consulta.filter(
+                models.Permission.code.like(resource.value + ".%")
+            )
+
+        return [
+            permission_to_gql(permiso)
+            for permiso in consulta.order_by(models.Permission.id).all()
+        ]
 
     # Consultar permisos de un rol 
 
