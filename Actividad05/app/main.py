@@ -10,7 +10,7 @@ import bcrypt
 from decimal import Decimal
 from Actividad05.app.database import engine, Base, get_db, SessionLocal
 import Actividad05.app.models as models
-
+import app.models as models
 
 # --- SEGURIDAD ---
 SECRET_KEY = "clave_super_secreta_jwt"
@@ -299,7 +299,6 @@ class RolePermissionType:
     role: Role
     permission: Permission
 
-
 # --- INPUTS ---
 @strawberry.input
 class CreateAccountInput:
@@ -390,6 +389,77 @@ def exigir_permiso(db: Session, company_user_id: int, codigo: str) -> None:
     if permitido is None:
         raise Exception(f"El rol no tiene el permiso {codigo}")
 
+@strawberry.input
+class SetRolePermissionsInput:
+    roleId: strawberry.ID
+    permissionIds: List[strawberry.ID]
+
+@strawberry.type
+class RolePermissionPlan:
+    role: Role
+    current: List[Permission]
+    toActivate: List[Permission]
+    toDeactivate: List[Permission]
+    unchanged: List[Permission]
+    finalCount: int
+
+
+def calcular_plan(db: Session, role_id: str, permission_ids: List[str]) -> dict:
+    # 1. Fail-Fast: Validar IDs duplicados en la entrada
+    if len(permission_ids) != len(set(permission_ids)):
+        raise Exception("La lista de permisos contiene IDs duplicados")
+
+    # 2. Validar existencia y estado del rol
+    role = db.query(models.Role).filter(
+        models.Role.id == role_id, 
+        models.Role.is_active == True
+    ).first()
+    
+    if not role:
+        raise Exception("El rol no existe o está inactivo")
+
+    # 3. Proteger estado crítico: No modificar al administrador
+    if role.code == "ADMINISTRADOR":
+        raise Exception("No se pueden modificar los permisos del rol ADMINISTRADOR")
+
+    # 4. Validar que los permisos deseados existan y estén activos
+    desired_permissions = []
+    if permission_ids:
+        desired_permissions = db.query(models.Permission).filter(
+            models.Permission.id.in_(permission_ids),
+            models.Permission.is_active == True
+        ).all()
+
+        if len(desired_permissions) != len(permission_ids):
+            raise Exception("Uno o más permisos deseados no existen o están inactivos")
+
+    # 5. Obtener los permisos actualmente activos del rol
+    current_assignments = db.query(models.RolePermission).filter(
+        models.RolePermission.role_id == role.id,
+        models.RolePermission.is_active == True
+    ).all()
+    
+    current_permissions = [
+        assignment.permission for assignment in current_assignments 
+        if assignment.permission.is_active
+    ]
+
+    # 6. Cálculo de diferencias mediante teoría de conjuntos para alta cohesión
+    current_dict = {str(p.id): p for p in current_permissions}
+    desired_dict = {str(p.id): p for p in desired_permissions}
+
+    to_activate = [p for p_id, p in desired_dict.items() if p_id not in current_dict]
+    to_deactivate = [p for p_id, p in current_dict.items() if p_id not in desired_dict]
+    unchanged = [p for p_id, p in desired_dict.items() if p_id in current_dict]
+
+    return {
+        "role": role,
+        "current": current_permissions,
+        "to_activate": to_activate,
+        "to_deactivate": to_deactivate,
+        "unchanged": unchanged,
+        "final_count": len(desired_permissions)
+    }
 # --- QUERIES ---
 @strawberry.type
 class Query:
@@ -556,6 +626,35 @@ class Query:
             )
             for membership in memberships
         ]
+    @strawberry.field
+    def previewRolePermissions(
+        self, 
+        info: strawberry.Info, 
+        input: SetRolePermissionsInput, 
+        actorCompanyUserId: strawberry.ID
+    ) -> Optional[RolePermissionPlan]:
+        
+        db = info.context["db"]
+        
+        # Reutilizamos exigir_permiso conforme a los requerimientos
+        exigir_permiso(db, int(actorCompanyUserId), "roles.read")
+
+        try:
+            # Delegamos la responsabilidad del cálculo
+            plan_data = calcular_plan(db, input.roleId, input.permissionIds)
+
+            # Mapeamos los objetos de base de datos a los tipos de GraphQL
+            return RolePermissionPlan(
+                role=role_to_gql(plan_data["role"]),
+                current=[permission_to_gql(p) for p in plan_data["current"]],
+                toActivate=[permission_to_gql(p) for p in plan_data["to_activate"]],
+                toDeactivate=[permission_to_gql(p) for p in plan_data["to_deactivate"]],
+                unchanged=[permission_to_gql(p) for p in plan_data["unchanged"]],
+                finalCount=plan_data["final_count"]
+            )
+        except Exception as e:
+            # Strawberry capturará esta excepción, devolverá null en data y colocará el mensaje en errors
+            raise Exception(str(e))
 
 # --- MUTATIONS ---
 @strawberry.type
