@@ -1,4 +1,5 @@
 import os
+from datetime import datetime, timedelta, timezone
 import jwt
 from jwt.exceptions import PyJWTError, ExpiredSignatureError, InvalidSignatureError
 from dotenv import load_dotenv
@@ -11,13 +12,18 @@ if not SECRETO:
     raise RuntimeError("Falta la variable de entorno JWT_SECRET")
 
 ALGORITMO = "HS256"
+MINUTOS_VIGENCIA = 30
+
+def crear_token(company_user_id: int, company_id: int) -> str:
+    ahora = datetime.now(timezone.utc)
+    datos = {
+        "companyUserId": company_user_id,
+        "companyId": company_id,
+        "exp": ahora + timedelta(minutes=MINUTOS_VIGENCIA),
+    }
+    return jwt.encode(datos, SECRETO, algorithm=ALGORITMO)
 
 def leer_actor(db_session, info):
-    """
-    Lee el token JWT desde el encabezado HTTP 'Authorization: Bearer <token>',
-    lo valida (firma y expiración estricta con HS256) y consulta en tiempo real 
-    en MySQL la membresía y el rol activo del usuario.
-    """
     request = info.context.get("request")
     if not request:
         raise Exception("Contexto de petición HTTP no disponible en GraphQL.")
