@@ -1,0 +1,9 @@
+query PermissionCatalog($actorCompanyUserId: ID!, $resource: PermissionResource) {
+  permissionCatalog(actorCompanyUserId: $actorCompanyUserId, resource: $resource) {
+    id
+    code
+    name
+    description
+    isActive
+  }
+}
