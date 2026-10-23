@@ -601,14 +601,6 @@ class Query:
         actor = leer_actor(db, info)
         exigir_permiso(db, actor["company_user"].id, "company.users.read")
         memberships = db.query(models.CompanyUser).all()
-        return [
-            CompanyUserType(
-                id=str(membership.id),
-                companyId=str(membership.company_id),
-                userId=str(membership.user_id),
-                isAdmin=membership.is_admin,
-                isActive=membership.is_active
-
         memberships = db.query(models.CompanyUser).all()
         return [
                 CompanyUserType(
