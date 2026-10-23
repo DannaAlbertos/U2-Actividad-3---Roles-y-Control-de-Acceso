@@ -4,6 +4,7 @@ from strawberry.fastapi import GraphQLRouter
 from typing import Optional, List
 from datetime import datetime
 from sqlalchemy.orm import Session
+from jose import jwt, JWTError
 import bcrypt
 from decimal import Decimal
 from app.database import engine, Base, get_db, SessionLocal
@@ -13,6 +14,28 @@ from app.seguridad import leer_actor, crear_token
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
     return bcrypt.checkpw(plain_password.encode('utf-8'), hashed_password.encode('utf-8'))
+
+from app.seguridad import leer_actor
+# --- SEGURIDAD ---
+SECRET_KEY = "clave_super_secreta_jwt"
+ALGORITHM = "HS256"
+def get_password_hash(password: str) -> str:
+    salt = bcrypt.gensalt()
+    return bcrypt.hashpw(password.encode('utf-8'), salt).decode('utf-8')
+def verify_password(plain_password: str, hashed_password: str) -> bool:
+    return bcrypt.checkpw(plain_password.encode('utf-8'), hashed_password.encode('utf-8'))
+def create_access_token(data: dict):
+    to_encode = data.copy()
+    to_encode.update({"exp": datetime.utcnow() + timedelta(hours=2)})
+    return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
+def get_current_user_from_token(token: str, db: Session):
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        email: str = payload.get("sub")
+        if email is None: return None
+        return db.query(models.User).filter(models.User.email == email).first()
+    except JWTError:
+        return None
 
 Base.metadata.create_all(bind=engine)
 # Parte 1 de la actividad 3 - Datos iniciales: roles y permisos
@@ -34,7 +57,7 @@ PERMISOS_INICIALES = [
     ("roles.read", "Ver roles", "Ver roles y la matriz de permisos"),
     ("roles.write", "Administrar roles", "Asignar o quitar permisos de un rol y asignar un rol a una membresía"),
 ]
-##
+
 #Matriz inicial de permisos por rol
 MATRIZ_PERMISOS = {
     "ADMINISTRADOR": [
@@ -109,7 +132,7 @@ f"No existe el permiso: {permission_code}"
         raise
     finally:
         db.close()
-##
+
 def seed_roles_y_permisos():
     db = SessionLocal()
     try:
@@ -205,6 +228,8 @@ class AuthPayload:
     token: str
     tokenType: str
     user: Optional[User]
+
+
 # Class Role
 @strawberry.type
 class Role:
@@ -286,6 +311,7 @@ def role_to_gql(r: models.Role) -> Role:
     return Role(id=r.id, code=r.code, name=r.name, description=r.description, isActive=r.is_active)
 def permission_to_gql(p: models.Permission) -> Permission:
     return Permission(id=p.id, code=p.code, name=p.name, description=p.description, isActive=p.is_active)
+
 def account_to_gql(a: models.Account) -> Account:
     return Account(
         id=a.id, companyId=a.company_id,
@@ -322,6 +348,7 @@ def transaction_to_gql(t: models.Transaction) -> Transaction:
         account=account_to_gql(t.account), concept=concept_to_gql(t.concept),
         capturedByUser=User(id=u.id, name=u.name, email=u.email),
     )
+
 def exigir_permiso(db: Session, company_user_id: int, codigo: str) -> None:
     asignacion = (
             db.query(models.CompanyUserRole)
@@ -433,6 +460,7 @@ class Query:
         if accountType: q = q.filter(models.Account.account_type == accountType.value)
         if activeOnly: q = q.filter(models.Account.is_active == True)
         return [account_to_gql(a) for a in q.all()]
+        return [Account({k: getattr(a, k) for k in a.__dict__.keys() if k in Account.__annotations__ and k != 'company'}, companyId=a.company_id, accountType=AccountType(a.account_type.value), company=Company(id=a.company.id, name=a.company.name, isActive=a.company.is_active)) for a in q.all()]
     @strawberry.field
     def concepts(self, info: strawberry.Info, companyId: strawberry.ID, conceptType: Optional[ConceptType] = None, activeOnly: Optional[bool] = None) -> List[Concept]:
         db = info.context["db"]
@@ -444,6 +472,9 @@ class Query:
         if conceptType: q = q.filter(models.Concept.concept_type == conceptType.value)
         if activeOnly: q = q.filter(models.Concept.is_active == True)
         return [concept_to_gql(c) for c in q.all()]
+
+        return [Concept({k: getattr(c, k) for k in c.__dict__.keys() if k in Concept.__annotations__}, companyId=c.company_id, conceptType=ConceptType(c.concept_type.value)) for c in q.all()]
+
     @strawberry.field
     def accountConcepts(self, info: strawberry.Info, accountId: strawberry.ID) -> List[AccountConcept]:
         db = info.context["db"]
@@ -453,17 +484,46 @@ class Query:
         if cuenta is None or int(cuenta.company_id) != int(actor["company_id"]):
             raise Exception("La cuenta no pertenece a tu empresa")
         q = db.query(models.AccountConcept).filter(models.AccountConcept.account_id == accountId, models.AccountConcept.is_active == True)
+
         return [account_concept_to_gql(ac) for ac in q.all()]
+
+        res = []
+        for ac in q.all():
+            a = ac.account
+            c = ac.concept
+            gql_a = Account({k: getattr(a, k) for k in a.__dict__.keys() if k in Account.__annotations__ and k != 'company'}, companyId=a.company_id, accountType=AccountType(a.account_type.value), company=Company(id=a.company.id, name=a.company.name, isActive=a.company.is_active))
+            gql_c = Concept({k: getattr(c, k) for k in c.__dict__.keys() if k in Concept.__annotations__}, companyId=c.company_id, conceptType=ConceptType(c.concept_type.value))
+            res.append(AccountConcept(id=ac.id, accountId=ac.account_id, conceptId=ac.concept_id, isActive=ac.is_active, createdAt=ac.created_at, account=gql_a, concept=gql_c))
+        return res
+
     @strawberry.field
     def transactions(self, info: strawberry.Info, accountId: Optional[strawberry.ID] = None, transactionType: Optional[TransactionType] = None, limit: Optional[int] = 50, offset: Optional[int] = 0) -> List[Transaction]:
         db = info.context["db"]
         actor = leer_actor(db, info)
         exigir_permiso(db, actor["company_user"].id, "transactions.read")
         q = db.query(models.Transaction).join(models.Account, models.Transaction.account_id == models.Account.id).filter(models.Transaction.is_active == True, models.Account.company_id == actor["company_id"])
+
         if accountId: q = q.filter(models.Transaction.account_id == accountId)
         if transactionType: q = q.filter(models.Transaction.transaction_type == transactionType.value)
         q = q.offset(offset).limit(limit)
         return [transaction_to_gql(t) for t in q.all()]
+
+        if accountId: q = q.filter(models.Transaction.account_id == accountId)
+        if transactionType: q = q.filter(models.Transaction.transaction_type == transactionType.value)
+        if accountId: q = q.filter(models.Transaction.account_id == accountId)
+        if transactionType: q = q.filter(models.Transaction.transaction_type == transactionType.value)
+        q = q.offset(offset).limit(limit)
+        res = []
+        for t in q.all():
+            a = t.account
+            c = t.concept
+            u = t.captured_by_user
+            gql_a = Account({k: getattr(a, k) for k in a.__dict__.keys() if k in Account.__annotations__ and k != 'company'}, companyId=a.company_id, accountType=AccountType(a.account_type.value), company=Company(id=a.company.id, name=a.company.name, isActive=a.company.is_active))
+            gql_c = Concept({k: getattr(c, k) for k in c.__dict__.keys() if k in Concept.__annotations__}, companyId=c.company_id, conceptType=ConceptType(c.concept_type.value))
+            gql_u = User(id=u.id, name=u.name, email=u.email)
+            res.append(Transaction({k: getattr(t, k) for k in t.__dict__.keys() if k in Transaction.__annotations__ and k not in ['account', 'concept', 'capturedByUser']}, accountId=t.account_id, conceptId=t.concept_id, transactionType=TransactionType(t.transaction_type.value), capturedBy=t.captured_by, account=gql_a, concept=gql_c, capturedByUser=gql_u))
+        return res
+
     # Implementación de campos (roles, rol y permisos)
     # Roles
     @strawberry.field
@@ -486,8 +546,10 @@ class Query:
     @strawberry.field
     def permissions(self, info: strawberry.Info, activeOnly: Optional[bool] = None) -> List[Permission]:
         db = info.context["db"]
+
         actor = leer_actor(db, info)
         exigir_permiso(db, actor["company_user"].id, "roles.read")
+
         q = db.query(models.Permission)
         if activeOnly: q = q.filter(models.Permission.is_active == True)
         return [permission_to_gql(p) for p in q.order_by(models.Permission.id).all()]
@@ -499,6 +561,7 @@ class Query:
         roleId: strawberry.ID
     ) -> List[RolePermissionType]:
         db = info.context["db"]
+
         actor = leer_actor(db, info)
         exigir_permiso(db, actor["company_user"].id, "roles.read")
         assignments = (
@@ -545,6 +608,15 @@ class Query:
                 userId=str(membership.user_id),
                 isAdmin=membership.is_admin,
                 isActive=membership.is_active
+
+        memberships = db.query(models.CompanyUser).all()
+        return [
+                CompanyUserType(
+                    id=str(membership.id),
+                    companyId=str(membership.company_id),
+                    userId=str(membership.user_id),
+                    isAdmin=membership.is_admin,
+                    isActive=membership.is_active
             )
             for membership in memberships
         ]
@@ -573,12 +645,16 @@ class Mutation:
         except Exception:
             db.rollback()
             raise
+
+    # (Omitimos CRUD empresa por espacio, ya están en DB si usas la anterior)
+
     @strawberry.mutation
     def login(self, info: strawberry.Info, input: LoginInput) -> AuthPayload:
         db = info.context["db"]
         user = db.query(models.User).filter(models.User.email == input.email).first()
         if not user or not verify_password(input.password, user.hashed_password):
             raise Exception("Credenciales incorrectas")
+
         if not user.is_active:
             raise Exception("Usuario inactivo")
         membresia = (
@@ -595,6 +671,9 @@ class Mutation:
             tokenType="Bearer",
             user=User(id=user.id, name=user.name, email=user.email),
         )
+
+        return AuthPayload(token=create_access_token(data={"sub": user.email}), tokenType="Bearer")
+
     # CreateRole
     @strawberry.mutation
     def createRole(self, info: strawberry.Info, input: CreateRoleInput) -> Role:
@@ -640,13 +719,20 @@ class Mutation:
         exigir_permiso(db, actor["company_user"].id, "accounts.write")
         if int(input.companyId) != int(actor["company_id"]):
             raise Exception("No puedes acceder a otra empresa")
+
+
+        # Validar duplicidad
         existing = db.query(models.Account).filter(models.Account.company_id == input.companyId, models.Account.name == input.name).first()
         if existing: raise Exception("La cuenta ya existe para esta empresa")
         db_a = models.Account(company_id=input.companyId, account_type=input.accountType.value, name=input.name, bank_name=input.bankName, account_number=input.accountNumber, clabe=input.clabe, card_last_digits=input.cardLastDigits, short_description=input.shortDescription, long_description=input.longDescription)
         db.add(db_a)
         db.commit()
         db.refresh(db_a)
+
         return account_to_gql(db_a)
+
+        return Query.accounts(None, info, companyId=input.companyId)[-1]
+
     @strawberry.mutation
     def createConcept(self, info: strawberry.Info, input: CreateConceptInput) -> Concept:
         db = info.context["db"]
@@ -660,7 +746,11 @@ class Mutation:
         db.add(db_c)
         db.commit()
         db.refresh(db_c)
+
         return concept_to_gql(db_c)
+
+        return Query.concepts(None, info, companyId=input.companyId)[-1]
+
     @strawberry.mutation
     def assignConceptToAccount(self, info: strawberry.Info, input: AssignConceptToAccountInput) -> AccountConcept:
         db = info.context["db"]
@@ -681,8 +771,12 @@ class Mutation:
         db_ac = models.AccountConcept(account_id=input.accountId, concept_id=input.conceptId)
         db.add(db_ac)
         db.commit()
+
         db.refresh(db_ac)
         return account_concept_to_gql(db_ac)
+
+        return Query.accountConcepts(None, info, accountId=input.accountId)[-1]
+
     @strawberry.mutation
     def removeConceptFromAccount(self, info: strawberry.Info, accountId: strawberry.ID, conceptId: strawberry.ID) -> bool:
         db = info.context["db"]
@@ -704,21 +798,41 @@ class Mutation:
         user = db.query(models.User).filter(models.User.id == actor["company_user"].user_id).first()
         if user is None or not user.is_active:
             raise Exception("Usuario inactivo o inexistente")
+
         if input.amount <= 0: raise Exception("El monto del movimiento debe ser mayor que cero.")
+
+        # Validación: Monto > 0
+        if input.amount <= 0: raise Exception("El monto del movimiento debe ser mayor que cero.")
+        # Validación: Cuenta y concepto existen
+
         account = db.query(models.Account).filter(models.Account.id == input.accountId, models.Account.is_active == True).first()
         if not account: raise Exception("La cuenta no existe.")
         concept = db.query(models.Concept).filter(models.Concept.id == input.conceptId, models.Concept.is_active == True).first()
         if not concept: raise Exception("El concepto no existe.")
+
         if int(account.company_id) != int(actor["company_id"]) or int(concept.company_id) != int(actor["company_id"]):
             raise Exception("La cuenta y el concepto deben pertenecer a tu empresa")
         allowed = db.query(models.AccountConcept).filter(models.AccountConcept.account_id == account.id, models.AccountConcept.concept_id == concept.id, models.AccountConcept.is_active == True).first()
         if not allowed: raise Exception("El concepto no está permitido para la cuenta seleccionada.")
+
+        # Validación: Misma empresa que el token
+        if int(account.company_id) != int(actor["company_id"]) or int(concept.company_id) != int(actor["company_id"]):
+            raise Exception("La cuenta y el concepto deben pertenecer a tu empresa")
+        # Validación: Concepto permitido
+        allowed = db.query(models.AccountConcept).filter(models.AccountConcept.account_id == account.id, models.AccountConcept.concept_id == concept.id, models.AccountConcept.is_active == True).first()
+        if not allowed: raise Exception("El concepto no está permitido para la cuenta seleccionada.")
+        # Validación: Tipo compatible
+
         if input.transactionType.value != concept.concept_type.value: raise Exception("El tipo de movimiento debe ser compatible con el tipo de concepto.")
         db_t = models.Transaction(account_id=input.accountId, concept_id=input.conceptId, transaction_type=input.transactionType.value, amount=input.amount, transaction_date=input.transactionDate or datetime.utcnow(), captured_by=user.id, short_description=input.shortDescription, long_description=input.longDescription)
         db.add(db_t)
         db.commit()
         db.refresh(db_t)
+
         return transaction_to_gql(db_t)
+
+        return Query.transactions(None, info, accountId=input.accountId)[-1]
+
     @strawberry.mutation
     def deleteTransaction(self, info: strawberry.Info, id: strawberry.ID) -> Transaction:
         db = info.context["db"]
@@ -731,8 +845,12 @@ class Mutation:
             raise Exception("No puedes modificar movimientos de otra empresa")
         t.is_active = False
         db.commit()
+
         db.refresh(t)
         return transaction_to_gql(t)
+
+        return Query.transactions(None, info, accountId=t.account_id)[0]
+
     #  Asignar un permiso a un rol
     @strawberry.mutation
     def assignPermissionToRole(
@@ -789,6 +907,9 @@ class Mutation:
                 permission=permission_to_gql(permission)
         )
     # Desactivar un permiso de un rol
+
+        # Desactivar un permiso de un rol
+
     @strawberry.mutation
     def removePermissionFromRole(
         self,
@@ -797,16 +918,30 @@ class Mutation:
         permissionId: strawberry.ID
     ) -> bool:
         db = info.context["db"]
+
         actor = leer_actor(db, info)
         exigir_permiso(db, actor["company_user"].id, "roles.write")
+
+        # Buscar la relación entre el rol y el permiso
+
         assignment = db.query(models.RolePermission).filter(
             models.RolePermission.role_id == roleId,
             models.RolePermission.permission_id == permissionId
         ).first()
         if not assignment:
+
             raise Exception("La asignación entre el rol y el permiso no existe")
         if not assignment.is_active:
             raise Exception("La asignación ya está desactivada")
+
+            raise Exception(
+                "La asignación entre el rol y el permiso no existe"
+            )
+        if not assignment.is_active:
+            raise Exception(
+                "La asignación ya está desactivada"
+            )
+        # Desactivar sin eliminar el registro
         assignment.is_active = False
         db.commit()
         return True
@@ -949,5 +1084,10 @@ class Mutation:
             raise
 schema = strawberry.Schema(query=Query, mutation=Mutation)
 graphql_app = GraphQLRouter(schema, context_getter=get_context)
+
 app = FastAPI(title="Sistema Financiero API - Actividad 6")
 app.include_router(graphql_app, prefix="/graphql")
+
+app = FastAPI(title="Sistema Financiero API - Actividad 4")
+app.include_router(graphql_app, prefix="/graphql")
+
